@@ -33,7 +33,12 @@ node bot.js mc.example.com MyBot offline 123456
 node bot.js mc.hypixel.net myemail@example.com microsoft
 ```
 
-## Hosting on Glitch (Free 24/7)
-1. Import this repository to Glitch.
-2. The `package.json` and `bot.js` are ready to go.
-3. Use **UptimeRobot** to ping the Glitch project URL every 5 minutes to keep it awake.
+## Hosting on Render (Free 24/7)
+1. Push this repository to GitHub.
+2. Create a new **Web Service** on [Render.com](https://render.com).
+3. Connect your repository.
+4. Use the following settings:
+   - **Build Command**: `npm install`
+   - **Start Command**: `npm start`
+5. Once deployed, copy your `.onrender.com` URL.
+6. Use **UptimeRobot** to ping that URL every 5 minutes to prevent the bot from sleeping.
