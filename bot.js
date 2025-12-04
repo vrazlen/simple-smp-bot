@@ -1,5 +1,4 @@
 const mineflayer = require('mineflayer')
-const http = require('http')
 
 // --- Configuration ---
 const config = {
@@ -10,17 +9,6 @@ const config = {
   password: null,          // /login password (optional)
   version: false           // Auto-detect version
 }
-
-// --- Glitch 24/7 Keep-Alive ---
-// This web server exists solely to be pinged by UptimeRobot
-const webServer = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' })
-  res.end(`Bot is running! Connected to: ${config.host}`)
-})
-
-webServer.listen(3000, () => {
-  console.log('Web server listening on port 3000 (Ready for UptimeRobot)')
-})
 
 // --- CLI Argument Parsing ---
 // Usage: node bot.js <host> <username> <auth> <password>
