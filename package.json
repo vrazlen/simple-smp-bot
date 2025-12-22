@@ -5,14 +5,28 @@
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node tests/config.test.js",
+    "lint": "eslint .",
+    "format": "prettier --write \"**/*.{js,json,md,yml,yaml}\"",
+    "fix:protocol": "node scripts/fix-protocol.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "mineflayer": "^4.33.0",
-    "mineflayer-pathfinder": "^2.4.5"
+    "dotenv": "^16.4.7",
+    "minecraft-protocol": "file:vendor/node-minecraft-protocol",
+    "mineflayer": "file:vendor/mineflayer",
+    "mineflayer-pathfinder": "^2.4.5",
+    "prismarine-auth": "^2.7.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.4.2"
+  },
+  "overrides": {
+    "minecraft-protocol": "file:vendor/node-minecraft-protocol"
   }
 }

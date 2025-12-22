@@ -1,0 +1,14 @@
+[package]
+name = "rust-bot"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+azalea = { git = "https://github.com/azalea-rs/azalea" }
+azalea-viaversion = { git = "https://github.com/azalea-rs/azalea-viaversion" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[patch.crates-io]
+chacha20 = { path = "vendor/chacha20" }
+rand = { path = "vendor/rand" }

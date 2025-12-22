@@ -1,54 +1,99 @@
 const mineflayer = require('mineflayer')
+const { buildConfig, loadEnv, validateConfig } = require('./src/config')
 
-// --- Configuration ---
-const config = {
-  host: 'localhost',       // Server IP
-  port: 25565,             // Server Port
-  username: 'AFK_Bot',     // Username or Email
-  auth: 'offline',         // 'microsoft' or 'offline'
-  password: null,          // /login password (optional)
-  version: false           // Auto-detect version
+loadEnv()
+
+const { config, errors } = buildConfig({ argv: process.argv, env: process.env })
+const issues = validateConfig(config, errors)
+if (issues.length > 0) {
+  console.error('[Bot] Configuration errors:')
+  issues.forEach((issue) => console.error(`- ${issue}`))
+  process.exit(1)
 }
 
-// --- CLI Argument Parsing ---
-// Usage: node bot.js <host> <username> <auth> <password>
-const args = process.argv.slice(2)
-if (args.length > 0) config.host = args[0]
-if (args.length > 1) config.username = args[1]
-if (args.length > 2) config.auth = args[2]
-if (args.length > 3) config.password = args[3]
+let reconnectAttempts = 0
+let reconnectTimer = null
+let activeBot = null
+let shouldReconnect = true
 
-console.log(`\n[Bot] Initializing...`)
-console.log(`[Bot] Target: ${config.host}:${config.port}`)
-console.log(`[Bot] User: ${config.username}`)
-console.log(`[Bot] Auth: ${config.auth}\n`)
+function logInfo(message) {
+  console.log(`[Bot] ${message}`)
+}
 
-// --- Bot Logic ---
+function logWarn(message) {
+  console.warn(`[Bot] ${message}`)
+}
+
+function logError(message) {
+  console.error(`[Bot] ${message}`)
+}
+
+function printStartupConfig() {
+  logInfo('Initializing...')
+  logInfo(`Target: ${config.host}:${config.port}`)
+  logInfo(`User: ${config.username}`)
+  logInfo(`Auth: ${config.auth}`)
+  logInfo(`Password set: ${config.password ? 'yes' : 'no'}`)
+  logInfo(`Version: ${config.version || 'auto'}`)
+}
+
+function computeReconnectDelay() {
+  const base = config.reconnectBaseMs
+  const max = config.reconnectMaxMs
+  const expDelay = Math.min(max, base * Math.pow(2, reconnectAttempts))
+  const jitter = Math.floor(Math.random() * 1000)
+  return expDelay + jitter
+}
+
+function scheduleReconnect() {
+  if (!shouldReconnect) return
+  if (reconnectTimer) return
+
+  const delay = computeReconnectDelay()
+  reconnectAttempts += 1
+
+  logWarn(`Disconnected. Reconnecting in ${Math.round(delay / 1000)}s...`)
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null
+    createBot()
+  }, delay)
+}
+
+function clearReconnectTimer() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+}
+
 function createBot() {
   const bot = mineflayer.createBot({
     host: config.host,
     port: config.port,
     username: config.username,
     auth: config.auth,
-    version: config.version
+    version: config.version,
   })
 
+  activeBot = bot
+  let stopAfkRoutine = null
+
   bot.on('login', () => {
-    console.log(`[Bot] Logged in as ${bot.username}`)
+    logInfo(`Logged in as ${bot.username}`)
   })
 
   bot.on('spawn', () => {
-    console.log('[Bot] Spawned in world.')
+    logInfo('Spawned in world.')
+    reconnectAttempts = 0
 
-    // Handle AuthMe /login
     if (config.password) {
-      console.log('[Bot] Authenticating...')
+      logInfo('Authenticating...')
       setTimeout(() => {
         bot.chat(`/login ${config.password}`)
       }, 2000)
     }
 
-    startAfkRoutine(bot)
+    stopAfkRoutine = startAfkRoutine(bot)
   })
 
   bot.on('chat', (username, message) => {
@@ -57,47 +102,91 @@ function createBot() {
   })
 
   bot.on('kicked', (reason) => {
-    console.log(`[Bot] Kicked: ${reason}`)
+    logWarn(`Kicked: ${formatReason(reason)}`)
   })
 
   bot.on('error', (err) => {
-    console.log(`[Bot] Error: ${err.message}`)
+    const message = err && err.stack ? err.stack : String(err)
+    logError(message)
+    if (message.includes('Unsupported protocol version')) {
+      logWarn('Protocol mismatch. Run: npm run fix:protocol -- <mc_version>')
+    }
   })
 
   bot.on('end', () => {
-    console.log('[Bot] Disconnected. Reconnecting in 30 seconds...')
-    setTimeout(createBot, 30000)
+    if (stopAfkRoutine) stopAfkRoutine()
+    scheduleReconnect()
   })
 }
 
 function startAfkRoutine(bot) {
-  console.log('[Bot] AFK routine started.')
+  logInfo('AFK routine started.')
 
-  // 1. Random Look
-  setInterval(() => {
-    if (!bot.entity) return
-    const yaw = (Math.random() * Math.PI) - (Math.PI / 2)
-    const pitch = (Math.random() * Math.PI / 2) - (Math.PI / 4)
-    bot.look(yaw, pitch)
-  }, 5000)
+  const timers = []
 
-  // 2. Random Movement (Jump/Sneak)
-  setInterval(() => {
-    if (!bot.entity) return
-    if (Math.random() > 0.5) {
-      bot.setControlState('jump', true)
-      setTimeout(() => bot.setControlState('jump', false), 500)
-    } else {
-      bot.setControlState('sneak', true)
-      setTimeout(() => bot.setControlState('sneak', false), 1000)
-    }
-  }, 15000)
+  timers.push(
+    setInterval(() => {
+      if (!bot.entity) return
+      const yaw = Math.random() * Math.PI - Math.PI / 2
+      const pitch = Math.random() * (Math.PI / 2) - Math.PI / 4
+      bot.look(yaw, pitch)
+    }, 5000),
+  )
 
-  // 3. Swing Arm (Prevent timeout)
-  setInterval(() => {
-    if (!bot.entity) return
-    bot.swingArm()
-  }, 30000)
+  timers.push(
+    setInterval(() => {
+      if (!bot.entity) return
+      if (Math.random() > 0.5) {
+        bot.setControlState('jump', true)
+        setTimeout(() => bot.setControlState('jump', false), 500)
+      } else {
+        bot.setControlState('sneak', true)
+        setTimeout(() => bot.setControlState('sneak', false), 1000)
+      }
+    }, 15000),
+  )
+
+  timers.push(
+    setInterval(() => {
+      if (!bot.entity) return
+      bot.swingArm()
+    }, 30000),
+  )
+
+  return () => timers.forEach((timer) => clearInterval(timer))
 }
 
+function formatReason(reason) {
+  if (reason === undefined || reason === null) return 'unknown'
+  if (typeof reason === 'string') return reason
+  try {
+    return JSON.stringify(reason)
+  } catch (error) {
+    return String(reason)
+  }
+}
+
+function shutdown(signal) {
+  logWarn(`Received ${signal}. Shutting down...`)
+  shouldReconnect = false
+  clearReconnectTimer()
+
+  if (activeBot) {
+    activeBot.quit('Shutdown requested')
+  }
+
+  setTimeout(() => process.exit(0), 2000)
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'))
+process.on('SIGTERM', () => shutdown('SIGTERM'))
+process.on('unhandledRejection', (reason) => {
+  logError(`Unhandled rejection: ${formatReason(reason)}`)
+})
+process.on('uncaughtException', (err) => {
+  logError(err && err.stack ? err.stack : String(err))
+  shutdown('uncaughtException')
+})
+
+printStartupConfig()
 createBot()
