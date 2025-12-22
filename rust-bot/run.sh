@@ -14,7 +14,6 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Ensure crates are downloaded before patching.
 cargo fetch >/dev/null 2>&1 || true
 
 VENDOR_DIR="$SCRIPT_DIR/vendor"
@@ -36,12 +35,8 @@ copy_crate() {
   cp -R "$src" "$dest"
 }
 
-apply_patch() {
+patch_chacha20() {
   local file="$1"
-  local marker="$2"
-  if rg -q "$marker" "$file"; then
-    return
-  fi
   python - "$file" <<'PY'
 import sys
 from pathlib import Path
@@ -49,13 +44,19 @@ from pathlib import Path
 path = Path(sys.argv[1])
 text = path.read_text()
 
-if "CryptoGenerator" in text and "Generator" in text and "next_word" in text:
+text = text.replace("#[derive(Clone)]\n", "")
+
+if "CryptoGenerator" in text and "next_word" in text:
+    path.write_text(text)
     sys.exit(0)
 
-# Patch chacha20 rng.rs
 text = text.replace(
     "use rand_core::{\n    CryptoRng, RngCore, SeedableRng,\n    block::{BlockRng, BlockRngCore, CryptoBlockRng},\n};",
     "use rand_core::{\n    CryptoRng, RngCore, SeedableRng,\n    block::{BlockRng, CryptoGenerator, Generator},\n};",
+)
+text = text.replace(
+    "pub struct BlockRngResults([u32; BUFFER_SIZE]);",
+    "pub type BlockRngResults = [u32; BUFFER_SIZE];",
 )
 text = text.replace(
     "pub struct BlockRngResults([u32; BUFFER_SIZE]);\n\nimpl AsRef<[u32]> for BlockRngResults {\n    fn as_ref(&self) -> &[u32] {\n        &self.0\n    }\n}\n\nimpl AsMut<[u32]> for BlockRngResults {\n    fn as_mut(&mut self) -> &mut [u32] {\n        &mut self.0\n    }\n}\n\nimpl Default for BlockRngResults {\n    fn default() -> Self {\n        Self([0u32; BUFFER_SIZE])\n    }\n}\n\n#[cfg(feature = \"zeroize\")]\nimpl Drop for BlockRngResults {\n    fn drop(&mut self) {\n        self.0.zeroize();\n    }\n}\n",
@@ -82,40 +83,43 @@ from pathlib import Path
 path = Path(sys.argv[1])
 text = path.read_text()
 
-if "Generator<Output = [u32; 64]>" in text:
-    sys.exit(0)
+text = text.replace("BlockRngCore", "Generator")
+text = text.replace("CryptoBlockRng", "CryptoGenerator")
+
+if "Generator<Output = [u32; 64]>" not in text:
+    text = text.replace(
+        "use rand_core::block::{BlockRng, Generator, CryptoGenerator};",
+        "use rand_core::block::{BlockRng, CryptoGenerator, Generator};",
+    )
+    text = text.replace(
+        "R: Generator + SeedableRng,",
+        "R: Generator<Output = [u32; 64]> + SeedableRng,",
+    )
+    text = text.replace(
+        "R: Generator<Item = u32> + SeedableRng,",
+        "R: Generator<Output = [u32; 64]> + SeedableRng,",
+    )
+    text = text.replace(
+        "R: Generator<Item = u32> + SeedableRng + CryptoGenerator,",
+        "R: Generator<Output = [u32; 64]> + SeedableRng + CryptoGenerator,",
+    )
 
 text = text.replace(
-    "use rand_core::block::{BlockRng, BlockRngCore, CryptoBlockRng};\nuse rand_core::{CryptoRng, RngCore, SeedableRng, TryCryptoRng, TryRngCore};",
-    "use rand_core::block::{BlockRng, CryptoGenerator, Generator};\nuse rand_core::{CryptoRng, RngCore, SeedableRng, TryCryptoRng, TryRngCore};",
-)
-text = text.replace(
-    "R: BlockRngCore + SeedableRng,",
-    "R: Generator<Output = [u32; 64]> + SeedableRng,",
-)
-text = text.replace(
-    "R: BlockRngCore<Item = u32> + SeedableRng,",
-    "R: Generator<Output = [u32; 64]> + SeedableRng,",
-)
-text = text.replace(
-    "R: BlockRngCore<Item = u32> + SeedableRng + CryptoBlockRng,",
-    "R: Generator<Output = [u32; 64]> + SeedableRng + CryptoGenerator,",
-)
-text = text.replace(
-    "impl<R, Rsdr> BlockRngCore for ReseedingCore<R, Rsdr>",
-    "impl<R, Rsdr> Generator for ReseedingCore<R, Rsdr>",
-)
-text = text.replace(
-    "type Output = <R as Generator>::Output;",
+    "type Item = <R as Generator>::Item;\n    type Results = <R as Generator>::Results;",
     "type Output = [u32; 64];",
 )
 text = text.replace(
-    "impl<R, Rsdr> CryptoBlockRng for ReseedingCore<R, Rsdr>",
-    "impl<R, Rsdr> CryptoGenerator for ReseedingCore<R, Rsdr>",
+    "fn generate(&mut self, results: &mut Self::Results)",
+    "fn generate(&mut self, results: &mut Self::Output)",
 )
+text = text.replace(
+    "fn reseed_and_generate(&mut self, results: &mut <Self as Generator>::Results)",
+    "fn reseed_and_generate(&mut self, results: &mut <Self as Generator>::Output)",
+)
+
 text = text.replace("self.0.next_u32()", "{ let mut bytes = [0u8; 4]; self.0.fill_bytes(&mut bytes); u32::from_le_bytes(bytes) }")
 text = text.replace("self.0.next_u64()", "{ let mut bytes = [0u8; 8]; self.0.fill_bytes(&mut bytes); u64::from_le_bytes(bytes) }")
-text = text.replace("[`BlockRngCore::generate`]", "[`Generator::generate`]")
+text = text.replace("[`Generator::generate`]", "[`Generator::generate`]")
 
 path.write_text(text)
 PY
@@ -192,7 +196,7 @@ PY
 copy_crate "chacha20" "0.10.0-rc.5"
 copy_crate "rand" "0.10.0-rc.5"
 
-apply_patch "$VENDOR_DIR/chacha20/src/rng.rs" "CryptoGenerator"
+patch_chacha20 "$VENDOR_DIR/chacha20/src/rng.rs"
 patch_rand "$VENDOR_DIR/rand/src/rngs/reseeding.rs"
 patch_xoshiro128 "$VENDOR_DIR/rand/src/rngs/xoshiro128plusplus.rs"
 patch_xoshiro256 "$VENDOR_DIR/rand/src/rngs/xoshiro256plusplus.rs"
